@@ -80,8 +80,6 @@ namespace std {
     template<>
     struct hash<Vertex> {
         size_t operator()(const Vertex &v) const noexcept {
-            // Hash based on your Vertex structure members
-            // Example if Vertex has position, normal, texCoord:
             return hash<glm::vec3>()(v.pos) ^
                    (hash<glm::vec3>()(v.color) << 1) ^
                    (hash<glm::vec2>()(v.texCoord) << 2);
@@ -93,6 +91,20 @@ struct UniformBufferObject {
     alignas(16) glm::mat4 model;
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
+};
+
+struct Camera {
+    glm::vec3 position;
+    glm::vec3 front;
+    glm::vec3 up;
+    float speed;
+};
+
+Camera camera = {
+    glm::vec3(0.0f, 0.0f, 1.0f), // initial position
+    glm::vec3(0.0f, 0.0f, -1.0f), // looking toward origin
+    glm::vec3(0.0f, 1.0f, 0.0f), // up vector
+    1.0f // movement speed
 };
 
 // const std::vector<Vertex> vertices = {
@@ -125,6 +137,66 @@ public:
         initVulkan();
         mainLoop();
         cleanup();
+    }
+
+    static void keyCallback(GLFWwindow *window, int key, int scancode, int action, int mods) {
+        if (action != GLFW_PRESS && action != GLFW_REPEAT)
+            return;
+
+        if (key == GLFW_KEY_X) {
+            camera.front.z += camera.speed;
+        }
+        if (key == GLFW_KEY_Z) {
+            camera.front.z -= camera.speed;
+        }
+
+        if (key == GLFW_KEY_Q) {
+            camera.position.y += camera.speed; // move up
+
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
+        if (key == GLFW_KEY_E) {
+            camera.position.y -= camera.speed; // move down
+
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
+
+        if (key == GLFW_KEY_W) {
+            camera.position += camera.speed * camera.front;
+
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
+        if (key == GLFW_KEY_S) {
+            camera.position -= camera.speed * camera.front;
+
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
+        if (key == GLFW_KEY_A) {
+            camera.position -= glm::normalize(glm::cross(camera.front, camera.up)) * camera.speed;
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
+        if (key == GLFW_KEY_D) {
+            camera.position += glm::normalize(glm::cross(camera.front, camera.up)) * camera.speed;
+            std::cout << "Camera moved to: "
+                    << camera.position.x << ", "
+                    << camera.position.y << ", "
+                    << camera.position.z << "\n";
+        }
     }
 
 private:
@@ -174,7 +246,6 @@ private:
     std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
     std::vector<vk::raii::Fence> inFlightFences;
 
-    uint32_t mipLevels = 0;
     vk::raii::Image textureImage = nullptr;
     vk::raii::ImageView textureImageView = nullptr;
     vk::raii::Sampler textureSampler = nullptr;
@@ -244,10 +315,14 @@ private:
                     attrib.vertices[3 * index.vertex_index + 2]
                 };
 
-                vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-                };
+                if (index.texcoord_index >= 0) {
+                    vertex.texCoord = {
+                        attrib.texcoords[2 * index.texcoord_index + 0],
+                        1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+                    };
+                } else {
+                    vertex.texCoord = {0.0f, 0.0f}; // fallback if no UV
+                }
 
                 vertex.color = {1.0f, 1.0f, 1.0f};
 
@@ -265,17 +340,17 @@ private:
         vk::Format depthFormat = findDepthFormat();
         createImage(swapChainExtent.width,
                     swapChainExtent.height,
-                    1,
                     depthFormat,
                     vk::ImageTiling::eOptimal,
-                    vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransferDst,
+                    vk::ImageUsageFlagBits::eDepthStencilAttachment,
                     vk::MemoryPropertyFlagBits::eDeviceLocal,
-                    depthImage, depthImageMemory);
-        depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);
+                    depthImage,
+                    depthImageMemory);
+        depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);
         transitionImageLayout(depthImage,
                               depthFormat,
                               vk::ImageLayout::eUndefined,
-                              vk::ImageLayout::eTransferDstOptimal, mipLevels);
+                              vk::ImageLayout::eTransferDstOptimal);
     }
 
     vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates,
@@ -306,6 +381,7 @@ private:
             vk::FormatFeatureFlagBits::eDepthStencilAttachment
         );
     }
+
 
     static bool hasStencilComponent(vk::Format format) {
         return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint;
@@ -342,15 +418,13 @@ private:
     void createTextureImageView() {
         textureImageView = createImageView(textureImage,
                                            vk::Format::eR8G8B8A8Srgb,
-                                           vk::ImageAspectFlagBits::eColor,
-                                           mipLevels);
+                                           vk::ImageAspectFlagBits::eColor);
     }
 
     [[nodiscard]] vk::raii::ImageView createImageView(
         const vk::raii::Image &image,
         vk::Format format,
-        vk::ImageAspectFlags aspectFlags,
-        uint32_t mipLevels) const {
+        vk::ImageAspectFlags aspectFlags) const {
         vk::ImageViewCreateInfo viewInfo({},
                                          image,
                                          vk::ImageViewType::e2D,
@@ -358,7 +432,6 @@ private:
                                          {},
                                          {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
         viewInfo.subresourceRange.aspectMask = aspectFlags;
-        viewInfo.subresourceRange.levelCount = mipLevels;
 
         return {device, viewInfo};
     }
@@ -367,7 +440,6 @@ private:
         int texWidth, texHeight, texChannels;
         stbi_uc *pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         vk::DeviceSize imageSize = texWidth * texHeight * 4;
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
 
         if (!pixels) {
             throw std::runtime_error("failed to load texture image!");
@@ -390,7 +462,6 @@ private:
 
         createImage(texWidth,
                     texHeight,
-                    mipLevels,
                     vk::Format::eR8G8B8A8Srgb,
                     vk::ImageTiling::eOptimal,
                     vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
@@ -402,18 +473,17 @@ private:
             textureImage,
             vk::Format::eR8G8B8A8Srgb,
             vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eTransferDstOptimal, mipLevels);
+            vk::ImageLayout::eTransferDstOptimal);
         copyBufferToImage(
             stagingBuffer,
             textureImage,
             static_cast<uint32_t>(texWidth),
             static_cast<uint32_t>(texHeight));
-        // transitionImageLayout(
-        //     textureImage,
-        //     vk::Format::eR8G8B8A8Srgb,
-        //     vk::ImageLayout::eTransferDstOptimal,
-        //     vk::ImageLayout::eShaderReadOnlyOptimal,
-        //     mipLevels);
+        transitionImageLayout(
+            textureImage,
+            vk::Format::eR8G8B8A8Srgb,
+            vk::ImageLayout::eTransferDstOptimal,
+            vk::ImageLayout::eShaderReadOnlyOptimal);
     }
 
     void generateMipmaps(vk::raii::Image &image,
@@ -435,7 +505,6 @@ private:
 
     void createImage(uint32_t width,
                      uint32_t height,
-                     uint32_t mipLevels,
                      vk::Format format,
                      vk::ImageTiling tiling,
                      vk::ImageUsageFlags usage,
@@ -447,7 +516,7 @@ private:
             vk::ImageType::e2D,
             format,
             {width, height, 1},
-            mipLevels,
+            1,
             1,
             vk::SampleCountFlagBits::e1,
             tiling,
@@ -484,8 +553,7 @@ private:
     void transitionImageLayout(const vk::raii::Image &image,
                                vk::Format format,
                                vk::ImageLayout oldLayout,
-                               vk::ImageLayout newLayout,
-                               uint32_t mipLevels) {
+                               vk::ImageLayout newLayout) {
         auto commandBuffer = beginSingleTimeCommands();
 
         vk::ImageMemoryBarrier barrier{};
@@ -501,7 +569,7 @@ private:
             aspectMask = vk::ImageAspectFlagBits::eColor;
         }
 
-        barrier.subresourceRange = {aspectMask, 0, mipLevels, 0, 1};
+        barrier.subresourceRange = {aspectMask, 0, 1, 0, 1};
 
         vk::PipelineStageFlags sourceStage;
         vk::PipelineStageFlags destinationStage;
@@ -1171,100 +1239,6 @@ private:
         }
     }
 
-    u_int32_t getPresentIndex(const std::vector<vk::QueueFamilyProperties> &queueFamilyProperties,
-                              u_int32_t graphicsIndex) {
-        // determine a queueFamilyIndex that supports present
-        // first check if the graphicsIndex is good enough
-        auto presentIndex = physicalDevice.getSurfaceSupportKHR(graphicsIndex, *surface)
-                                ? graphicsIndex
-                                : static_cast<uint32_t>(queueFamilyProperties.size());
-        if (presentIndex == queueFamilyProperties.size()) {
-            // the graphicsIndex doesn't support present -> look for another family index that supports both
-            // graphics and present
-            for (size_t i = 0; i < queueFamilyProperties.size(); i++) {
-                if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
-                    physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(i), *surface)) {
-                    graphicsIndex = static_cast<uint32_t>(i);
-                    presentIndex = graphicsIndex;
-                    break;
-                }
-            }
-
-            if (presentIndex == queueFamilyProperties.size()) {
-                // there's nothing like a single family index that supports both graphics and present -> look for another
-                // family index that supports present
-                for (size_t i = 0; i < queueFamilyProperties.size(); i++) {
-                    if (physicalDevice.getSurfaceSupportKHR(static_cast<uint32_t>(i), *surface)) {
-                        presentIndex = static_cast<uint32_t>(i);
-                        break;
-                    }
-                }
-            }
-        }
-
-        return presentIndex;
-    }
-
-    // void createLogicalDevice() {
-    //     std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
-    //
-    //     // get the first index into queueFamilyProperties which supports both graphics and present
-    //     for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) {
-    //         if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
-    //             physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
-    //             // found a queue family that supports both graphics and present
-    //             queueIndex = qfpIndex;
-    //             break;
-    //         }
-    //     }
-    //
-    //     if (queueIndex == ~0) {
-    //         throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
-    //     }
-    //
-    //     // // query for Vulkan 1.3 features
-    //     // vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features,
-    //     //     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-    //     //     {.features = {.samplerAnisotropy = true}}, // vk::PhysicalDeviceFeatures2
-    //     //     {.synchronization2 = true, .dynamicRendering = true}, // vk::PhysicalDeviceVulkan13Features
-    //     //     {.extendedDynamicState = true} // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
-    //     // };
-    //
-    //     vk::PhysicalDeviceVulkan13Features vulkan13Features;
-    //     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures;
-    //     vk::PhysicalDeviceFeatures2 features2;
-    //
-    //     vulkan13Features.dynamicRendering = vk::True;
-    //     vulkan13Features.synchronization2 = vk::True;
-    //     extendedDynamicStateFeatures.extendedDynamicState = vk::True;
-    //     features2.features.samplerAnisotropy = vk::True;
-    //
-    //     vk::StructureChain<vk::PhysicalDeviceFeatures2,
-    //         vk::PhysicalDeviceVulkan13Features,
-    //         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain{
-    //         features2,
-    //         vulkan13Features,
-    //         extendedDynamicStateFeatures,
-    //     };
-    //
-    //     vk::DeviceQueueCreateInfo deviceQueueCreateInfo{};
-    //     deviceQueueCreateInfo.queueFamilyIndex = queueIndex;
-    //     deviceQueueCreateInfo.queueCount = 1;
-    //
-    //     float queuePriority = 0.0f;
-    //     deviceQueueCreateInfo.pQueuePriorities = &queuePriority;
-    //
-    //     vk::DeviceCreateInfo deviceCreateInfo{};
-    //     deviceCreateInfo.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>();
-    //     deviceCreateInfo.queueCreateInfoCount = 1;
-    //     deviceCreateInfo.pQueueCreateInfos = &deviceQueueCreateInfo;
-    //     deviceCreateInfo.enabledExtensionCount = deviceExtensions.size();
-    //     deviceCreateInfo.ppEnabledExtensionNames = deviceExtensions.data();
-    //
-    //     device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-    //     queue = vk::raii::Queue(device, queueIndex, 0);
-    // }
-
     void createLogicalDevice() {
         std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
@@ -1291,7 +1265,7 @@ private:
         vulkan13Features.dynamicRendering = VK_TRUE;
 
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures{};
-        extendedDynamicStateFeatures.extendedDynamicState = VK_TRUE;
+        extendedDynamicStateFeatures.extendedDynamicState = VK_FALSE;
 
         // chain the features
         vk::StructureChain<vk::PhysicalDeviceFeatures2,
@@ -1339,6 +1313,7 @@ private:
                 return availablePresentMode;
             }
         }
+
         return vk::PresentModeKHR::eFifo;
     }
 
@@ -1441,18 +1416,24 @@ private:
         float time = std::chrono::duration<float>(currentTime - startTime).count();
 
         UniformBufferObject ubo{};
+        ubo.model = glm::mat4(1.0f);
         ubo.model = rotate(
-            glm::mat4(1.0f),
-            time * glm::radians(20.0f),
-            glm::vec3(0.0f, 0.0f, 1.0f));
-        ubo.view = lookAt(
-            glm::vec3(2.0f, 2.0f, 2.0f),
-            glm::vec3(0.0f, 0.0f, 0.0f),
-            glm::vec3(0.0f, 0.0f, 1.0f));
+            ubo.model,
+            time * glm::radians(10.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f));
+        // ubo.model = glm::translate(ubo.model, -bboxCenter);
+        // ubo.model = glm::scale(ubo.model, glm::vec3(scale));
+        ubo.view = glm::lookAt(
+            camera.position,
+            camera.position + camera.front,
+            camera.up
+        );
         ubo.proj = glm::perspective(
             glm::radians(45.0f),
             static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height),
-            0.1f, 10.0f);
+            0.1f,
+            500.0f
+        );
         ubo.proj[1][1] *= -1;
 
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
@@ -1486,6 +1467,7 @@ private:
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+        glfwSetKeyCallback(window, keyCallback);
     }
 
     static void framebufferResizeCallback(GLFWwindow *window, int width, int height) {
