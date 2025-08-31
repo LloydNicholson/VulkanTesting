@@ -76,9 +76,9 @@ target_sources(VulkanCppModule
         "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
 )
 
-#add_executable(glslang::validator IMPORTED)
-#find_program(GLSLANG_VALIDATOR "glslangValidator" HINTS $ENV{VULKAN_SDK_PATH}/bin REQUIRED)
-#set_property(TARGET glslang::validator PROPERTY IMPORTED_LOCATION "${GLSLANG_VALIDATOR}")
+add_executable(glslang::validator IMPORTED)
+find_program(GLSLANG_VALIDATOR "glslangValidator" HINTS $ENV{VULKAN_SDK_PATH}/bin REQUIRED)
+set_property(TARGET glslang::validator PROPERTY IMPORTED_LOCATION "${GLSLANG_VALIDATOR}")
 
 function(add_slang_shader_target TARGET)
     cmake_parse_arguments(SHADER "" "SOURCES" ${ARGN})
